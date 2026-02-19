@@ -10,7 +10,7 @@
 python3 qa_models.py pull qwen2.5:14b
 
 # 2) Run QA scan + auto-refresh learned profile from reports/
-python3 qa_scan.py /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -29,6 +29,17 @@ Local QA tooling for penetration test reports (`.docx`) with optional LLM-assist
 - Learns reusable QA patterns from historical `v0.1 -> v1.0` report revisions.
 - Lets you switch models later without losing learned behavior.
 
+## Command name
+
+- Local repo usage: `./draftenheimer ...`
+- Optional global command:
+
+```bash
+ln -sf "$PWD/draftenheimer" /usr/local/bin/draftenheimer
+```
+
+Then you can run: `draftenheimer ...` from anywhere.
+
 ## SLM lifecycle
 
 - Start runtime: `./slm_start.sh`
@@ -44,7 +55,7 @@ Local QA tooling for penetration test reports (`.docx`) with optional LLM-assist
 Example (deep auto-learning):
 
 ```bash
-python3 qa_scan.py /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -65,7 +76,7 @@ python3 qa_models.py pull qwen2.5:14b
 3. Run report QA:
 
 ```bash
-python3 qa_scan.py /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -76,7 +87,7 @@ python3 qa_scan.py /path/to/report_v0.1.docx \
 4. Optional: write comments back into an annotated DOCX:
 
 ```bash
-python3 qa_scan.py /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -129,4 +140,82 @@ You do not lose learned behavior when switching models.
 ## Config
 
 - Keep local private overrides in `draftenheimer_ignore.json` (gitignored).
-- Start from `draftenheimer_ignore.example.json` and adjust phrases for your environment.
+- Keep acceptance/rejection feedback in `draftenheimer_feedback.json` (gitignored).
+- Start from `draftenheimer_ignore.example.json` and `draftenheimer_feedback.example.json`.
+
+### Ignore boilerplate comments
+
+Use `draftenheimer_ignore.json` to suppress known-safe annotations.
+
+```json
+{
+  "ignore_rewrite_from_phrases": [
+    "While this type of assessment is intended to mimic a real-world attack scenario"
+  ],
+  "ignore_diagnostic_codes": [
+    "DOC-STYLE-REWRITE-001"
+  ],
+  "ignore_message_contains": [
+    "Preferred rewrite: \"A Medical Device Security Testing is comprised"
+  ]
+}
+```
+
+### Teach accepted vs rejected revisions
+
+Use `draftenheimer_feedback.json`:
+
+```json
+{
+  "accepted_rewrites": [
+    {"from": "old sentence", "to": "new sentence"}
+  ],
+  "rejected_rewrites": [
+    {"from": "old boilerplate", "to": "new boilerplate"}
+  ],
+  "accepted_diagnostics": [
+    {"code": "LLM-NARR-001", "message_contains": "Clarify that the objective"}
+  ],
+  "rejected_diagnostics": [
+    {"code": "LLM-NARR-001", "message_contains": "Avoid overused phrasing"}
+  ]
+}
+```
+
+Behavior:
+- `accepted_rewrites`: promoted as preferred rewrite rules in future runs.
+- `rejected_rewrites`: suppressed so those exact rewrite suggestions stop appearing.
+- `accepted_diagnostics`: keeps matching diagnostics even if broad ignore rules exist.
+- `rejected_diagnostics`: suppresses matching diagnostics in future runs.
+
+Optional explicit paths per run:
+
+```bash
+./draftenheimer /path/to/report.docx \
+  --llm --provider ollama --model qwen2.5:14b \
+  --ignore-config /path/to/draftenheimer_ignore.json \
+  --feedback-config /path/to/draftenheimer_feedback.json
+```
+
+### Import decisions from reviewed annotated DOCX
+
+You can review comments in Word and mark decisions directly:
+- Put `[ACCEPT]` or `[REJECT]` (also supports `REJECTED`, `ACCEPT`, `REJECT`) in the original Draftenheimer comment text, or
+- Reply to the comment with those markers.
+- Leave comment unchanged to skip it.
+
+Imports now include both:
+- rewrite decisions (`DOC-STYLE-REWRITE-001` style comments)
+- non-rewrite diagnostic decisions (for example `LLM-NARR-001`)
+
+Then import decisions into `draftenheimer_feedback.json`:
+
+```bash
+draftenheimer --import-feedback-docx /path/to/reviewed.annotated.docx
+```
+
+Preview only (no write):
+
+```bash
+draftenheimer --import-feedback-docx /path/to/reviewed.annotated.docx --feedback-dry-run
+```

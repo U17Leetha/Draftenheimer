@@ -35,6 +35,7 @@ draftenheimer_profile.json
 
 # Local private ignore config
 draftenheimer_ignore.json
+draftenheimer_feedback.json
 
 # --- Xcode user data (added by git-smart-push.sh) ---
 xcuserdata/

@@ -5,5 +5,11 @@
   ],
   "ignore_rewrite_from_phrases": [
     "placeholder long boilerplate sentence to suppress rewrite comments"
+  ],
+  "ignore_diagnostic_codes": [
+    "DOC-STYLE-REWRITE-001"
+  ],
+  "ignore_message_contains": [
+    "Preferred rewrite: \"A Medical Device Security Testing is comprised"
   ]
 }

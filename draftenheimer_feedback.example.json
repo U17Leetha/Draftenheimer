@@ -1,0 +1,26 @@
+{
+  "accepted_rewrites": [
+    {
+      "from": "A Medical Device Security Testing is comprised of automated and manual activities.",
+      "to": "A Medical Device Security Test is comprised of automated and manual activities."
+    }
+  ],
+  "rejected_rewrites": [
+    {
+      "from": "A Medical Device Security Testing is comprised of automated and manual activities that focus on the discovery, target profiling, target examination, risk validation, impact evaluation, and remediation assurance of Baxter’s in-scope information assets.",
+      "to": "A Medical Device Security Test is comprised of automated and manual activities that focus on the discovery, target profiling, target examination, risk validation, impact evaluation, and remediation assurance of Baxter’s in-scope information assets."
+    }
+  ],
+  "accepted_diagnostics": [
+    {
+      "code": "LLM-NARR-001",
+      "message_contains": "Clarify that the objective was to assess security"
+    }
+  ],
+  "rejected_diagnostics": [
+    {
+      "code": "LLM-NARR-001",
+      "message_contains": "Avoid overused phrasing like 'comprehensive'"
+    }
+  ]
+}

@@ -381,14 +381,16 @@ def build_profile(
 
 
 def default_reports_dir() -> str:
+    base = Path(__file__).resolve().parent
     candidates = [
-        Path("training/qa_pair_training/reports"),
+        base / "reports",
         Path("reports"),
+        Path("training/qa_pair_training/reports"),
     ]
     for c in candidates:
         if c.exists() and c.is_dir():
             return str(c)
-    return "reports"
+    return str((Path(__file__).resolve().parent / "reports"))
 
 
 def main() -> None:

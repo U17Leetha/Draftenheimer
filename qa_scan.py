@@ -383,6 +383,8 @@ def _load_ignore_config(path):
     default = {
         'ignore_deprecated_phrases': [],
         'ignore_rewrite_from_phrases': [],
+        'ignore_diagnostic_codes': [],
+        'ignore_message_contains': [],
     }
     if not path or not os.path.exists(path):
         return default
@@ -410,6 +412,188 @@ def _matches_any_phrase(text, phrases):
         if np and (np in t or t in np):
             return True
     return False
+
+
+
+
+def _load_feedback_config(path):
+    default = {
+        'accepted_rewrites': [],
+        'rejected_rewrites': [],
+        'accepted_diagnostics': [],
+        'rejected_diagnostics': [],
+    }
+    if not path or not os.path.exists(path):
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return default
+        out = dict(default)
+
+        # Rewrite feedback
+        for key in ('accepted_rewrites', 'rejected_rewrites'):
+            vals = data.get(key, [])
+            if isinstance(vals, list):
+                cleaned = []
+                for v in vals:
+                    if not isinstance(v, dict):
+                        continue
+                    old_t = str(v.get('from', '')).strip()
+                    new_t = str(v.get('to', '')).strip()
+                    if old_t and new_t:
+                        cleaned.append({'from': old_t, 'to': new_t})
+                out[key] = cleaned
+
+        # Diagnostic feedback
+        for key in ('accepted_diagnostics', 'rejected_diagnostics'):
+            vals = data.get(key, [])
+            if isinstance(vals, list):
+                cleaned = []
+                for v in vals:
+                    if not isinstance(v, dict):
+                        continue
+                    code = str(v.get('code', '')).strip()
+                    msg = str(v.get('message_contains', '')).strip()
+                    if code or msg:
+                        cleaned.append({'code': code, 'message_contains': msg})
+                out[key] = cleaned
+
+        return out
+    except Exception:
+        return default
+
+
+def _rewrite_key(old_text, new_text):
+    return (
+        normalize_for_substring(str(old_text or '')),
+        normalize_for_substring(str(new_text or '')),
+    )
+
+
+def _merge_rewrite_rules(profile_rules, accepted_rules):
+    merged = []
+    seen = set()
+    for src in (accepted_rules or []):
+        key = _rewrite_key(src.get('from', ''), src.get('to', ''))
+        if not key[0] or not key[1] or key in seen:
+            continue
+        seen.add(key)
+        merged.append({'from': src.get('from', ''), 'to': src.get('to', ''), 'count': 9999, 'source': 'accepted_feedback'})
+    for src in (profile_rules or []):
+        key = _rewrite_key(src.get('from', ''), src.get('to', ''))
+        if not key[0] or not key[1] or key in seen:
+            continue
+        seen.add(key)
+        merged.append(src)
+    return merged
+
+
+def _diag_is_ignored(diag, ignore_codes, ignore_msg_parts):
+    code = str(diag.get('code', '')).strip()
+    msg = normalize_for_substring(str(diag.get('message', '')))
+    if code and code in (ignore_codes or []):
+        return True
+    for part in (ignore_msg_parts or []):
+        np = normalize_for_substring(part)
+        if np and np in msg:
+            return True
+    return False
+
+
+
+def _diag_matches_feedback_rule(diag, rule):
+    if not isinstance(rule, dict):
+        return False
+    rule_code = str(rule.get('code', '')).strip()
+    rule_msg = normalize_for_substring(str(rule.get('message_contains', '')))
+    if not rule_code and not rule_msg:
+        return False
+
+    diag_code = str(diag.get('code', '')).strip()
+    diag_msg = normalize_for_substring(str(diag.get('message', '')))
+
+    if rule_code and diag_code != rule_code:
+        return False
+    if rule_msg and rule_msg not in diag_msg:
+        return False
+    return True
+
+
+def _diag_matches_any_feedback_rule(diag, rules):
+    for rule in (rules or []):
+        if _diag_matches_feedback_rule(diag, rule):
+            return True
+    return False
+
+
+def _extract_quoted_phrases(text):
+    if not text:
+        return []
+    normalized = (
+        text.replace('“', '"')
+            .replace('”', '"')
+            .replace('‘', "'")
+            .replace('’', "'")
+    )
+    phrases = []
+    for m in re.finditer(r'"([^"]{3,120})"', normalized):
+        phrases.append(m.group(1).strip())
+    for m in re.finditer(r"'([^']{3,120})'", normalized):
+        phrases.append(m.group(1).strip())
+    out = []
+    seen = set()
+    for p in phrases:
+        key = normalize_for_substring(p)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _count_phrase_occurrences(text, phrase):
+    if not text or not phrase:
+        return 0
+    try:
+        return len(re.findall(re.escape(phrase), text, flags=re.IGNORECASE))
+    except re.error:
+        return text.lower().count(phrase.lower())
+
+
+def _augment_llm_message_with_counts(message, text):
+    if not message or not text:
+        return message, 0
+    msg_l = message.lower()
+    if 'overused phrase' not in msg_l and 'overused phrases' not in msg_l:
+        return message, 0
+
+    counts = []
+    for phrase in _extract_quoted_phrases(message):
+        c = _count_phrase_occurrences(text, phrase)
+        if c > 0:
+            counts.append((phrase, c))
+
+    if not counts:
+        return message, 0
+
+    summary = ', '.join(f'"{p}"={c}x' for p, c in counts[:4])
+    max_count = max(c for _, c in counts)
+    if 'counts:' in msg_l:
+        return message, max_count
+    return f"{message} Counts in narrative: {summary}.", max_count
+
+
+def _elevate_severity_for_repeat_count(severity, max_count):
+    s = str(severity or 'suggestion').lower()
+    if s == 'error':
+        return 'error'
+    if max_count >= 6:
+        return 'error'
+    if max_count >= 3 and s == 'suggestion':
+        return 'warning'
+    return s
 
 
 def _extract_json_array_from_text(text):
@@ -661,7 +845,7 @@ def test_bedrock_connection(model, bedrock_region="us-east-1", bedrock_profile="
                 pass
 
 
-def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, llm_pull=False, bedrock_region="us-east-1", bedrock_profile="sci_bedrock", ignore_config_path=None):
+def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, llm_pull=False, bedrock_region="us-east-1", bedrock_profile="sci_bedrock", ignore_config_path=None, feedback_config_path=None):
     blocks = parse_docx(docx_path)
     paragraphs = [b for b in blocks if b['type'] == 'p']
     table_texts = []
@@ -681,6 +865,20 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
     ignore_cfg = _load_ignore_config(ignore_config_path)
     ignore_deprecated = ignore_cfg.get('ignore_deprecated_phrases', [])
     ignore_rewrites = ignore_cfg.get('ignore_rewrite_from_phrases', [])
+    ignore_codes = ignore_cfg.get('ignore_diagnostic_codes', [])
+    ignore_message_contains = ignore_cfg.get('ignore_message_contains', [])
+
+    if not feedback_config_path:
+        feedback_config_path = os.path.join(os.path.dirname(__file__), 'draftenheimer_feedback.json')
+    feedback_cfg = _load_feedback_config(feedback_config_path)
+    accepted_rewrites = feedback_cfg.get('accepted_rewrites', [])
+    rejected_rewrites = feedback_cfg.get('rejected_rewrites', [])
+    accepted_diag_rules = feedback_cfg.get('accepted_diagnostics', [])
+    rejected_diag_rules = feedback_cfg.get('rejected_diagnostics', [])
+    rejected_rewrite_keys = {
+        _rewrite_key(x.get('from', ''), x.get('to', ''))
+        for x in rejected_rewrites
+    }
 
     # Repetition
     repeated = detect_repetition(paragraphs + table_texts)
@@ -766,7 +964,7 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                         'location': {'section': 'Document'},
                     })
             # Preferred sentence rewrites learned from prior report corrections
-            rewrite_rules = profile.get('preferred_rewrites', [])
+            rewrite_rules = _merge_rewrite_rules(profile.get('preferred_rewrites', []), accepted_rewrites)
             normalized_full = normalize_for_substring(full_text)
             for rule in rewrite_rules:
                 old_text = rule.get('from', '')
@@ -774,6 +972,8 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                 if not old_text or not new_text:
                     continue
                 if _matches_any_phrase(old_text, ignore_rewrites):
+                    continue
+                if _rewrite_key(old_text, new_text) in rejected_rewrite_keys:
                     continue
                 old_norm = normalize_for_substring(old_text)
                 new_norm = normalize_for_substring(new_text)
@@ -808,9 +1008,11 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                     ai_deprecated = profile.get('ai_deprecated_phrases', [])[:12]
                     ai_style_rules = profile.get('ai_style_rules', [])[:10]
                     rewrites = []
-                    for r in profile.get('preferred_rewrites', []):
+                    for r in _merge_rewrite_rules(profile.get('preferred_rewrites', []), accepted_rewrites):
                         old_t = r.get('from', '')
                         if _matches_any_phrase(old_t, ignore_rewrites):
+                            continue
+                        if _rewrite_key(r.get('from', ''), r.get('to', '')) in rejected_rewrite_keys:
                             continue
                         rewrites.append(r)
                         if len(rewrites) >= 12:
@@ -940,10 +1142,14 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                     for it in issues:
                         if not isinstance(it, dict):
                             continue
+                        base_severity = it.get('severity', 'suggestion')
+                        base_message = it.get('message', 'Narrative issue detected.')
+                        counted_message, max_count = _augment_llm_message_with_counts(base_message, narrative)
+                        final_severity = _elevate_severity_for_repeat_count(base_severity, max_count)
                         diagnostics.append({
-                            'severity': it.get('severity', 'suggestion'),
+                            'severity': final_severity,
                             'code': 'LLM-NARR-001',
-                            'message': it.get('message', 'Narrative issue detected.'),
+                            'message': counted_message,
                             'location': {'section': it.get('location_hint', 'Narrative')},
                             'source': 'ai_review',
                         })
@@ -1041,6 +1247,21 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                     'location': {'finding': f['title']},
                 })
 
+    filtered_diags = []
+    for d in diagnostics:
+        # Explicit accepted feedback has highest precedence.
+        if _diag_matches_any_feedback_rule(d, accepted_diag_rules):
+            filtered_diags.append(d)
+            continue
+        # Explicit rejected feedback suppresses recurring unwanted suggestions.
+        if _diag_matches_any_feedback_rule(d, rejected_diag_rules):
+            continue
+        # Then apply static ignore config.
+        if _diag_is_ignored(d, ignore_codes, ignore_message_contains):
+            continue
+        filtered_diags.append(d)
+    diagnostics = filtered_diags
+
     return {
         'document': os.path.basename(docx_path),
         'findings_count': len(findings),
@@ -1049,7 +1270,7 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Pentest report QA scan')
+    ap = argparse.ArgumentParser(prog='draftenheimer', description='Pentest report QA scan')
     ap.add_argument('docx_path', nargs='?')
     ap.add_argument('--json-out', default=None)
     ap.add_argument('--llm', action='store_true', help='Enable Ollama-based narrative QA')
@@ -1064,7 +1285,27 @@ def main():
     ap.add_argument(
         '--ignore-config',
         default=None,
-        help='Path to JSON config for skipping boilerplate phrase rewrites/deprecations.',
+        help='Path to JSON config for skipping boilerplate phrase rewrites/deprecations/codes/messages.',
+    )
+    ap.add_argument(
+        '--feedback-config',
+        default=None,
+        help='Path to JSON file containing accepted/rejected rewrite feedback.',
+    )
+    ap.add_argument(
+        '--import-feedback-docx',
+        default=None,
+        help='Import [ACCEPT]/[REJECT] decisions from a reviewed annotated DOCX into feedback config.',
+    )
+    ap.add_argument(
+        '--feedback-dry-run',
+        action='store_true',
+        help='With --import-feedback-docx, parse and report only; do not write feedback file.',
+    )
+    ap.add_argument(
+        '--feedback-author',
+        default='Draftenheimer',
+        help='With --import-feedback-docx, only use base comments from this author.',
     )
     ap.add_argument(
         '--rebuild-learned-profile',
@@ -1083,7 +1324,7 @@ def main():
     )
     ap.add_argument(
         '--reports-dir',
-        default='reports',
+        default=str(Path(__file__).resolve().parent / 'reports'),
         help='Directory containing v0.1/v1.0 report pairs for learned profile rebuild.',
     )
     ap.add_argument(
@@ -1107,9 +1348,33 @@ def main():
             raise SystemExit(1)
         raise SystemExit(0)
 
+    if args.import_feedback_docx:
+        feedback_script = Path(__file__).resolve().parent / 'import_feedback_from_docx.py'
+        feedback_path = args.feedback_config or str(Path(__file__).resolve().parent / 'draftenheimer_feedback.json')
+        feedback_cmd = [
+            sys.executable,
+            str(feedback_script),
+            args.import_feedback_docx,
+            '--feedback',
+            feedback_path,
+            '--author',
+            args.feedback_author,
+        ]
+        if args.feedback_dry_run:
+            feedback_cmd.append('--dry-run')
+        try:
+            subprocess.run(feedback_cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(json.dumps({
+                'error': f'Failed to import feedback from annotated DOCX: {e}'
+            }, indent=2))
+            raise SystemExit(1)
+        if not args.docx_path:
+            raise SystemExit(0)
+
     if not args.docx_path:
         print(json.dumps({
-            'error': 'docx_path is required unless --test-bedrock is used.'
+            'error': 'docx_path is required unless --test-bedrock or --import-feedback-docx is used.'
         }, indent=2))
         raise SystemExit(1)
 
@@ -1157,6 +1422,7 @@ def main():
         bedrock_region=args.bedrock_region,
         bedrock_profile=args.bedrock_profile,
         ignore_config_path=args.ignore_config,
+        feedback_config_path=args.feedback_config,
     )
     print(json.dumps(result, indent=2))
 
