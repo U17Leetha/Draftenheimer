@@ -257,11 +257,11 @@ def _diagnostic_source_label(diagnostic):
     return 'RULE-PATTERN'
 
 
-def annotate(docx_path, qa_json_path, out_path, author='ReportsQA'):
+def annotate(docx_path, qa_json_path, out_path, author='Draftenheimer'):
     with open(qa_json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    tmpdir = tempfile.mkdtemp(prefix='reportsqa_')
+    tmpdir = tempfile.mkdtemp(prefix='draftenheimer_')
     try:
         with zipfile.ZipFile(docx_path, 'r') as zf:
             zf.extractall(tmpdir)

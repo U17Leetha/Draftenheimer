@@ -53,7 +53,7 @@ def _bedrock_list(region, profile=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Manage models for ReportsQA')
+    ap = argparse.ArgumentParser(description='Manage models for Draftenheimer')
     ap.add_argument('--ollama-url', default='http://localhost:11434')
     sub = ap.add_subparsers(dest='cmd', required=True)
 

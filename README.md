@@ -1,4 +1,27 @@
-# ReportsQA
+# Draftenheimer
+
+## Copy/Paste Quickstart
+
+```bash
+# 0) Start local SLM runtime (Ollama)
+./slm_start.sh
+
+# 1) Pull local model
+python3 qa_models.py pull qwen2.5:14b
+
+# 2) Run QA scan on a report
+python3 qa_scan.py /path/to/report_v0.1.docx \
+  --llm \
+  --provider ollama \
+  --model qwen2.5:14b \
+  --json-out /tmp/report.qa.json
+
+# 3) Rebuild learned profile from local report pairs
+python3 build_learned_profile.py
+
+# 4) Stop local SLM runtime when done
+./slm_stop.sh
+```
 
 Local QA tooling for penetration test reports (`.docx`) with optional LLM-assisted narrative review.
 
@@ -7,6 +30,12 @@ Local QA tooling for penetration test reports (`.docx`) with optional LLM-assist
 - Keeps confidential report processing local when using Ollama.
 - Learns reusable QA patterns from historical `v0.1 -> v1.0` report revisions.
 - Lets you switch models later without losing learned behavior.
+
+## SLM lifecycle
+
+- Start runtime: `./slm_start.sh`
+- Stop runtime (server + unloaded models): `./slm_stop.sh`
+- Full stop including desktop app: `./slm_stop.sh --full`
 
 ## Quick start (local model)
 
@@ -39,35 +68,47 @@ python3 qa_scan.py /path/to/report_v0.1.docx \
   --annotate-out /tmp/report.annotated.docx
 ```
 
-## Rebuild learned profile from training pairs
+## Rebuild learned profile from report pairs
 
-Rebuild rule-based learned patterns from `training/qa_pair_training/reports/`:
+Rebuild rule-based learned patterns from local report pairs in `reports/`:
 
 ```bash
-python3 training/qa_pair_training/build_learned_profile.py
+python3 build_learned_profile.py
 ```
 
 Run AI-assisted pair comparison (local Ollama) to learn additional patterns:
 
 ```bash
-python3 training/qa_pair_training/build_learned_profile.py \
+python3 build_learned_profile.py \
   --ai-compare \
   --ai-provider ollama \
   --ai-model qwen2.5:14b \
   --ollama-url http://localhost:11434
 ```
 
-This updates `reportsqa_profile.json`, which `qa_scan.py` uses automatically.
+This updates `draftenheimer_profile.json`, which `qa_scan.py` uses automatically.
 
 ## Model changes later
 
 You do not lose learned behavior when switching models.
 
-- Learned behavior is stored in `reportsqa_profile.json`, not in model weights.
+- Learned behavior is stored in `draftenheimer_profile.json`, not in model weights.
 - To switch model, change only `--model` in `qa_scan.py`.
 - To refresh model-derived patterns for the new model, rerun the AI-assisted profile build with the new `--ai-model`.
 
-## More details
+## Keeping reports out of GitHub
 
-- Full training-pair workflow: `training/qa_pair_training/README.md`
-- Ignore/suppress specific boilerplate suggestions: `reportsqa_ignore.json`
+- Store confidential report files under `reports/` (or other ignored directories).
+- Do not commit raw `*.docx`, `*.pdf`, `*.pptx`, `*.xlsx`.
+- Generated report artifacts like `*.qa.json` and `*.annotated.docx` are also ignored.
+
+## Pairing convention
+
+- `*v0.1*.docx` is treated as draft.
+- `*v1.0*.docx` is treated as final.
+- Matching base names are paired automatically.
+
+## Config
+
+- Keep local private overrides in `draftenheimer_ignore.json` (gitignored).
+- Start from `draftenheimer_ignore.example.json` and adjust phrases for your environment.

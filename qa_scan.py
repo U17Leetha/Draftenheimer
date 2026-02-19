@@ -677,7 +677,7 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
 
     diagnostics = []
     if not ignore_config_path:
-        ignore_config_path = os.path.join(os.path.dirname(__file__), 'reportsqa_ignore.json')
+        ignore_config_path = os.path.join(os.path.dirname(__file__), 'draftenheimer_ignore.json')
     ignore_cfg = _load_ignore_config(ignore_config_path)
     ignore_deprecated = ignore_cfg.get('ignore_deprecated_phrases', [])
     ignore_rewrites = ignore_cfg.get('ignore_rewrite_from_phrases', [])
@@ -715,7 +715,7 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
             })
 
     # Profile-based checks (optional)
-    profile_path = os.path.join(os.path.dirname(__file__), 'reportsqa_profile.json')
+    profile_path = os.path.join(os.path.dirname(__file__), 'draftenheimer_profile.json')
     profile = None
     if os.path.exists(profile_path):
         try:
@@ -1069,7 +1069,7 @@ def main():
     ap.add_argument(
         '--rebuild-learned-profile',
         action='store_true',
-        help='Rebuild reportsqa_profile.json from training/qa_pair_training/reports before scanning.',
+        help='Rebuild draftenheimer_profile.json from reports/ before scanning.',
     )
     ap.add_argument(
         '--test-bedrock',
@@ -1099,7 +1099,7 @@ def main():
         raise SystemExit(1)
 
     if args.rebuild_learned_profile:
-        script_path = Path(__file__).resolve().parent / 'training' / 'qa_pair_training' / 'build_learned_profile.py'
+        script_path = Path(__file__).resolve().parent / 'build_learned_profile.py'
         try:
             subprocess.run([sys.executable, str(script_path)], check=True)
         except subprocess.CalledProcessError as e:

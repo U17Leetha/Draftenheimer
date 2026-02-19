@@ -18,19 +18,26 @@ models/
 # Logs
 *.log
 
-
-# Training data / sample documents (keep out of repo)
-training/
-reports/
-*.docx
-*.pdf
-*.pptx
-*.xlsx
-
-# --- Draftenheimer: never commit real reports / training artifacts ---
+# Confidential reports and attachments (never commit)
 training/
 reports/
 **/*.docx
 **/*.pdf
 **/*.pptx
 **/*.xlsx
+
+# Generated report artifacts
+*.annotated.docx
+*.qa.json
+
+# Local learned profile (may include sensitive phrases)
+draftenheimer_profile.json
+
+# Local private ignore config
+draftenheimer_ignore.json
+
+# --- Xcode user data (added by git-smart-push.sh) ---
+xcuserdata/
+**/xcuserdata/
+*.xcuserstate
+DerivedData/

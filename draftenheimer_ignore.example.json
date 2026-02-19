@@ -1,0 +1,9 @@
+{
+  "ignore_deprecated_phrases": [
+    "to assess the",
+    "the web application"
+  ],
+  "ignore_rewrite_from_phrases": [
+    "placeholder long boilerplate sentence to suppress rewrite comments"
+  ]
+}
