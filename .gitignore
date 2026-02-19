@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# Virtual environments
+venv/
+.env/
+
+# Model artifacts
+models/
+*.gguf
+
+# Logs
+*.log
+
+
+# Training data / sample documents (keep out of repo)
+training/
+reports/
+*.docx
+*.pdf
+*.pptx
+*.xlsx
+
+# --- Draftenheimer: never commit real reports / training artifacts ---
+training/
+reports/
+**/*.docx
+**/*.pdf
+**/*.pptx
+**/*.xlsx
