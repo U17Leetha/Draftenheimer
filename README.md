@@ -23,6 +23,36 @@ python3 qa_models.py pull qwen2.5:14b
 
 Local QA tooling for penetration test reports (`.docx`) with optional LLM-assisted narrative review.
 
+## What Draftenheimer Is
+
+Draftenheimer is a local-first quality control tool for penetration testing reports.
+It reviews `.docx` reports, flags quality issues, and can write inline Word comments so reviewers can triage findings quickly.
+
+## What It Does
+
+- Scans report structure and narrative quality.
+- Detects repeated phrasing, style issues, and consistency problems.
+- Optionally uses a local LLM (Ollama) for narrative QA feedback.
+- Learns rewrite and diagnostic preferences from historical report revisions (`v0.1 -> v1.0`) and reviewer decisions.
+- Annotates reports with comment tags like `RULE-PATTERN` and `AI-REVIEW` for easy filtering.
+
+## Core Capabilities
+
+- Rule/pattern QA: deterministic checks for formatting, hygiene, consistency, and known anti-patterns.
+- AI narrative QA: optional model-assisted checks for clarity, flow, professionalism, and overused wording.
+- Continuous learning: feedback import from reviewed annotated docs using `ACCEPT`/`REJECT` markers.
+- Local confidentiality: supports fully local processing with Ollama and local files.
+- Flexible suppression: ignore recurring boilerplate via local ignore config.
+
+## Typical Workflow
+
+1. Run `draftenheimer` on a draft report.
+2. Review generated JSON and optional annotated DOCX comments.
+3. Mark comments in Word as accepted/rejected.
+4. Import feedback with `draftenheimer --import-feedback-docx ...`.
+5. Re-run on the next draft with updated learned behavior.
+
+
 ## Why this setup
 
 - Keeps confidential report processing local when using Ollama.
