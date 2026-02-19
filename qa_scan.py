@@ -1072,6 +1072,21 @@ def main():
         help='Rebuild draftenheimer_profile.json from reports/ before scanning.',
     )
     ap.add_argument(
+        '--auto-learn',
+        action='store_true',
+        help='Auto-refresh learned profile from reports/ before scanning (non-fatal when no pairs). ',
+    )
+    ap.add_argument(
+        '--auto-learn-ai',
+        action='store_true',
+        help='When used with --auto-learn, include AI pair-comparison learning (slower). ',
+    )
+    ap.add_argument(
+        '--reports-dir',
+        default='reports',
+        help='Directory containing v0.1/v1.0 report pairs for learned profile rebuild.',
+    )
+    ap.add_argument(
         '--test-bedrock',
         action='store_true',
         help='Test Bedrock access using AWS profile and model, then exit.',
@@ -1098,10 +1113,34 @@ def main():
         }, indent=2))
         raise SystemExit(1)
 
-    if args.rebuild_learned_profile:
+    rebuild_requested = args.rebuild_learned_profile or args.auto_learn
+    if rebuild_requested:
         script_path = Path(__file__).resolve().parent / 'build_learned_profile.py'
+        rebuild_cmd = [
+            sys.executable,
+            str(script_path),
+            '--reports-dir',
+            args.reports_dir,
+        ]
+
+        if args.auto_learn:
+            rebuild_cmd.append('--allow-empty')
+
+        if args.auto_learn and args.auto_learn_ai and not args.model:
+            print(json.dumps({"error": "--auto-learn-ai requires --model so model-specific AI learning can run."}, indent=2))
+            raise SystemExit(1)
+
+        if args.auto_learn and args.auto_learn_ai:
+            rebuild_cmd.extend(['--ai-compare', '--ai-provider', args.provider])
+            if args.model:
+                rebuild_cmd.extend(['--ai-model', args.model])
+            if args.provider == 'bedrock':
+                rebuild_cmd.extend(['--bedrock-region', args.bedrock_region, '--bedrock-profile', args.bedrock_profile])
+            else:
+                rebuild_cmd.extend(['--ollama-url', args.ollama_url])
+
         try:
-            subprocess.run([sys.executable, str(script_path)], check=True)
+            subprocess.run(rebuild_cmd, check=True)
         except subprocess.CalledProcessError as e:
             print(json.dumps({
                 'error': f'Failed to rebuild learned profile: {e}'

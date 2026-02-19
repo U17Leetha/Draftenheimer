@@ -407,11 +407,15 @@ def main() -> None:
     parser.add_argument("--bedrock-profile", default="sci_bedrock")
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--min-ai-votes", type=int, default=2)
+    parser.add_argument("--allow-empty", action="store_true", help="Exit successfully when no v0.1/v1.0 pairs are found.")
     args = parser.parse_args()
 
     reports_dir = Path(args.reports_dir)
     pairs = discover_pairs(reports_dir)
     if not pairs:
+        if args.allow_empty:
+            print(f"No v0.1/v1.0 pairs found in: {reports_dir}. Skipping profile rebuild.")
+            raise SystemExit(0)
         raise SystemExit(f"No v0.1/v1.0 pairs found in: {reports_dir}")
     if args.ai_compare and not args.ai_model:
         raise SystemExit("--ai-compare requires --ai-model")

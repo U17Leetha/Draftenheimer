@@ -9,17 +9,15 @@
 # 1) Pull local model
 python3 qa_models.py pull qwen2.5:14b
 
-# 2) Run QA scan on a report
+# 2) Run QA scan + auto-refresh learned profile from reports/
 python3 qa_scan.py /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
+  --auto-learn \
   --json-out /tmp/report.qa.json
 
-# 3) Rebuild learned profile from local report pairs
-python3 build_learned_profile.py
-
-# 4) Stop local SLM runtime when done
+# 3) Stop local SLM runtime when done
 ./slm_stop.sh
 ```
 
@@ -37,6 +35,24 @@ Local QA tooling for penetration test reports (`.docx`) with optional LLM-assist
 - Stop runtime (server + unloaded models): `./slm_stop.sh`
 - Full stop including desktop app: `./slm_stop.sh --full`
 
+## Continuous learning behavior
+
+- `qa_scan.py` always reads `draftenheimer_profile.json` for QA rules/patterns.
+- Use `--auto-learn` to refresh that profile from local report pairs (`reports/`) before each scan.
+- Optional deeper learning: add `--auto-learn-ai` to include model-based pair comparison (slower).
+
+Example (deep auto-learning):
+
+```bash
+python3 qa_scan.py /path/to/report_v0.1.docx \
+  --llm \
+  --provider ollama \
+  --model qwen2.5:14b \
+  --auto-learn \
+  --auto-learn-ai \
+  --json-out /tmp/report.qa.json
+```
+
 ## Quick start (local model)
 
 1. Start Ollama locally.
@@ -53,6 +69,7 @@ python3 qa_scan.py /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
+  --auto-learn \
   --json-out /tmp/report.qa.json
 ```
 
@@ -63,12 +80,13 @@ python3 qa_scan.py /path/to/report_v0.1.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
+  --auto-learn \
   --json-out /tmp/report.qa.json \
   --annotate \
   --annotate-out /tmp/report.annotated.docx
 ```
 
-## Rebuild learned profile from report pairs
+## Manual profile rebuild (optional)
 
 Rebuild rule-based learned patterns from local report pairs in `reports/`:
 
