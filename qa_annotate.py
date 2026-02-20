@@ -210,6 +210,74 @@ def _find_paragraph_by_snippet(paragraphs, snippet):
     return None
 
 
+def _normalize_hint_text(text):
+    t = (text or '').strip().lower()
+    t = re.sub(r'\bsections?\b', '', t)
+    t = re.sub(r'\bthroughout the document\b', '', t)
+    t = re.sub(r'\s+', ' ', t).strip(' .,:;')
+    return t
+
+
+def _section_hint_candidates(section_hint):
+    raw = (section_hint or '').strip()
+    if not raw:
+        return []
+
+    parts = [raw]
+    splitters = [r'\s+and\s+', r'\s*/\s*', r'\s*,\s*']
+    for sp in splitters:
+        next_parts = []
+        for part in parts:
+            next_parts.extend([x for x in re.split(sp, part, flags=re.IGNORECASE) if x.strip()])
+        parts = next_parts
+
+    out = []
+    seen = set()
+    for part in parts:
+        normalized = _normalize_hint_text(part)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _find_paragraph_by_section_hint(paragraphs, section_hint):
+    candidates = _section_hint_candidates(section_hint)
+    if not candidates:
+        return None
+
+    # Exact/contains first.
+    for c in candidates:
+        p = _find_paragraph_by_text(paragraphs, c)
+        if p is not None:
+            return p
+        p = _find_paragraph_by_snippet(paragraphs, c)
+        if p is not None:
+            return p
+
+    # Token-overlap fallback for hints like "Information Gathering (Assembled Device)".
+    for c in candidates:
+        tokens = [t for t in re.findall(r'[a-z0-9]+', c) if len(t) > 3]
+        if not tokens:
+            continue
+        for p in paragraphs:
+            ptxt = _text_from_p(p).lower()
+            hit_count = sum(1 for t in tokens if t in ptxt)
+            if hit_count >= max(2, min(3, len(tokens))):
+                return p
+
+    return None
+
+
+
+
+def _first_meaningful_paragraph(paragraphs):
+    for p in paragraphs:
+        if _text_from_p(p).strip():
+            return p
+    return paragraphs[0] if paragraphs else None
+
 def _extract_quoted_strings(text):
     if not text:
         return []
@@ -236,6 +304,9 @@ def _find_target_paragraph(paragraphs, diagnostic):
         p = _find_paragraph_by_text(paragraphs, loc['section'])
         if p is not None:
             return p
+        p = _find_paragraph_by_section_hint(paragraphs, loc['section'])
+        if p is not None:
+            return p
 
     # 2) Use quoted snippets from message text when present.
     for snippet in _extract_quoted_strings(message):
@@ -243,8 +314,8 @@ def _find_target_paragraph(paragraphs, diagnostic):
         if p is not None:
             return p
 
-    # 3) Last-resort fallback: end of document (not top).
-    return paragraphs[-1] if paragraphs else None
+    # 3) Last-resort fallback: first paragraph to avoid dumping missed anchors at document end.
+    return _first_meaningful_paragraph(paragraphs)
 
 
 def _diagnostic_source_label(diagnostic):

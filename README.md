@@ -10,7 +10,7 @@
 python3 qa_models.py pull qwen2.5:14b
 
 # 2) Run QA scan + auto-refresh learned profile from reports/
-./draftenheimer /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.4.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -33,7 +33,7 @@ It reviews `.docx` reports, flags quality issues, and can write inline Word comm
 - Scans report structure and narrative quality.
 - Detects repeated phrasing, style issues, and consistency problems.
 - Optionally uses a local LLM (Ollama) for narrative QA feedback.
-- Learns rewrite and diagnostic preferences from historical report revisions (`v0.1 -> v1.0`) and reviewer decisions.
+- Learns rewrite and diagnostic preferences from historical report revisions (`v0.1 -> v0.2 -> v0.3 -> ...`) and reviewer decisions.
 - Annotates reports with comment tags like `RULE-PATTERN` and `AI-REVIEW` for easy filtering.
 
 ## Core Capabilities
@@ -56,7 +56,7 @@ It reviews `.docx` reports, flags quality issues, and can write inline Word comm
 ## Why this setup
 
 - Keeps confidential report processing local when using Ollama.
-- Learns reusable QA patterns from historical `v0.1 -> v1.0` report revisions.
+- Learns reusable QA patterns from historical versioned report revisions.
 - Lets you switch models later without losing learned behavior.
 
 ## Command name
@@ -70,6 +70,34 @@ ln -sf "$PWD/draftenheimer" /usr/local/bin/draftenheimer
 
 Then you can run: `draftenheimer ...` from anywhere.
 
+## Desktop UI (Tauri)
+
+A cross-platform desktop app is available in `draftenheimer-ui/`.
+It wraps the existing CLI so you can run scans and import feedback without typing long commands.
+
+### Current UI capabilities
+
+- Run report scans from a simplified main screen with Browse pickers for paths.
+- Open `Settings` for AI provider/model setup, runtime control, and advanced paths.
+- Configure auto-learn behavior in `Settings`: version pair mode, Track Changes on/off, and Track Changes weight.
+- Rebuild learning from the reports directory directly via `Settings -> Rebuild Learning Profile` (no scan required).
+- Settings values persist across restarts, including `Reports Directory`, `Ignore Config`, and `Feedback Config`.
+- Manage local Ollama runtime: start, stop, full stop, refresh models, and pull model.
+- Import reviewer decisions from annotated DOCX (`--import-feedback-docx` flow).
+- Keep live status updates (including `Model Ready`) and full stdout/stderr output.
+- Theme modes: `Light`, `Dark`, or `System`.
+- Window size and position persist between launches (reopens where you left it).
+
+### Run the UI
+
+```bash
+cd draftenheimer-ui
+npm install
+npm run dev
+```
+
+The UI auto-detects the tool directory, but you can override it in the app.
+
 ## SLM lifecycle
 
 - Start runtime: `./slm_start.sh`
@@ -79,13 +107,15 @@ Then you can run: `draftenheimer ...` from anywhere.
 ## Continuous learning behavior
 
 - `qa_scan.py` always reads `draftenheimer_profile.json` for QA rules/patterns.
-- Use `--auto-learn` to refresh that profile from local report pairs (`reports/`) before each scan.
+- Use `--auto-learn` to refresh that profile from local versioned reports (`reports/`) before each scan.
 - Optional deeper learning: add `--auto-learn-ai` to include model-based pair comparison (slower).
+- Auto-learn now pairs versions consecutively by default: `v0.1->v0.2`, `v0.2->v0.3`, etc.
+- Track Changes in Word docs are also used as extra learning signals by default during profile rebuild.
 
 Example (deep auto-learning):
 
 ```bash
-./draftenheimer /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.4.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -106,7 +136,7 @@ python3 qa_models.py pull qwen2.5:14b
 3. Run report QA:
 
 ```bash
-./draftenheimer /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.4.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -117,7 +147,7 @@ python3 qa_models.py pull qwen2.5:14b
 4. Optional: write comments back into an annotated DOCX:
 
 ```bash
-./draftenheimer /path/to/report_v0.1.docx \
+./draftenheimer /path/to/report_v0.4.docx \
   --llm \
   --provider ollama \
   --model qwen2.5:14b \
@@ -129,7 +159,7 @@ python3 qa_models.py pull qwen2.5:14b
 
 ## Manual profile rebuild (optional)
 
-Rebuild rule-based learned patterns from local report pairs in `reports/`:
+Rebuild rule-based learned patterns from local versioned reports in `reports/`:
 
 ```bash
 python3 build_learned_profile.py
@@ -139,11 +169,18 @@ Run AI-assisted pair comparison (local Ollama) to learn additional patterns:
 
 ```bash
 python3 build_learned_profile.py \
+  --pair-mode consecutive \
   --ai-compare \
   --ai-provider ollama \
   --ai-model qwen2.5:14b \
   --ollama-url http://localhost:11434
 ```
+
+Optional learning controls:
+- `--pair-mode consecutive` (default): learn each step (`v0.1->v0.2->v0.3...`).
+- `--pair-mode latest`: learn first->latest only per report family.
+- `--no-track-changes`: ignore Word Track Changes during learning.
+- `--track-weight 2`: weight tracked-change signals (higher = stronger influence).
 
 This updates `draftenheimer_profile.json`, which `qa_scan.py` uses automatically.
 
@@ -163,9 +200,10 @@ You do not lose learned behavior when switching models.
 
 ## Pairing convention
 
-- `*v0.1*.docx` is treated as draft.
-- `*v1.0*.docx` is treated as final.
-- Matching base names are paired automatically.
+- Any version token is supported: `v0.1`, `v0.2`, `v0.3`, `v1.0`, etc.
+- Matching base names are grouped, then paired in sequence by default (`--pair-mode consecutive`).
+- Use `--pair-mode latest` to learn only first->latest per report family.
+- If Word Track Changes exist, inserted/deleted text is included as extra learning signal.
 
 ## Config
 

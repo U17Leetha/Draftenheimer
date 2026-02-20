@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Draftenheimer Desktop</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="/main.js" defer></script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <img id="brand-symbol" class="brand-media" src="/assets/draftenheimer-symbol.png" alt="Draftenheimer symbol" />
+          <div class="brand-text-wrap">
+            <img id="brand-wordmark" class="brand-media" src="/assets/draftenheimer-wordmark.png" alt="Draftenheimer" />
+                        <p>Local report QA and reviewer feedback workflow.</p>
+          </div>
+        </div>
+        <div class="topbar-controls">
+          <button id="open-settings-btn" type="button" class="ghost">Settings</button>
+          <div id="status-pill" class="status-pill idle">
+            <span class="dot"></span>
+            <span id="status-text">Idle</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>Run Scan</h2>
+        <div class="grid-two">
+          <label>
+            Report DOCX
+            <div class="path-input">
+              <input id="scan-docx" type="text" placeholder="/path/to/report.docx" />
+              <button id="pick-scan-docx-btn" type="button" class="ghost">Browse</button>
+            </div>
+          </label>
+          <label>
+            JSON Output (optional)
+            <div class="path-input">
+              <input id="scan-json-out" type="text" placeholder="/tmp/report.qa.json" />
+              <button id="pick-json-out-btn" type="button" class="ghost">Browse</button>
+            </div>
+          </label>
+          <label>
+            Annotated DOCX Output (optional)
+            <div class="path-input">
+              <input id="scan-annotate-out" type="text" placeholder="/tmp/report.annotated.docx" />
+              <button id="pick-annotate-out-btn" type="button" class="ghost">Browse</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="toggles">
+          <label><input id="scan-llm" type="checkbox" checked /> Use LLM</label>
+          <label><input id="scan-llm-pull" type="checkbox" /> Pull Model If Missing</label>
+          <label><input id="scan-auto-learn" type="checkbox" checked /> Auto-Learn</label>
+          <label><input id="scan-auto-learn-ai" type="checkbox" /> Auto-Learn AI Compare</label>
+          <label><input id="scan-annotate" type="checkbox" checked /> Annotate DOCX</label>
+          <label><input id="scan-open-output" type="checkbox" /> Open output file after scan</label>
+          <label><input id="scan-reveal-output" type="checkbox" /> Reveal output in file manager</label>
+        </div>
+
+        <div class="actions">
+          <button id="run-scan-btn" type="button">Run Scan</button>
+          <div id="run-scan-status" class="inline-status idle">
+            <span class="dot"></span>
+            <span id="run-scan-status-text">Idle</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Import Feedback</h2>
+        <div class="grid-two">
+          <label>
+            Reviewed Annotated DOCX
+            <div class="path-input">
+              <input id="feedback-docx" type="text" placeholder="/path/to/reviewed.annotated.docx" />
+              <button id="pick-feedback-docx-btn" type="button" class="ghost">Browse</button>
+            </div>
+          </label>
+          <label>
+            Feedback Author (optional)
+            <input id="feedback-author" type="text" value="" placeholder="Draftenheimer or blank" />
+          </label>
+        </div>
+        <div class="toggles">
+          <label><input id="feedback-dry-run" type="checkbox" /> Dry Run</label>
+        </div>
+        <div class="actions">
+          <button id="import-feedback-btn" type="button">Import Feedback</button>
+        </div>
+      </section>
+
+      <section class="panel output">
+        <h2>Output</h2>
+        <pre id="output">Ready.</pre>
+      </section>
+    </main>
+
+    <aside id="settings-drawer" class="drawer hidden" aria-hidden="true">
+      <div class="drawer-header">
+        <h2>Settings</h2>
+        <button id="close-settings-btn" type="button" class="ghost">Close</button>
+      </div>
+
+      <div class="drawer-content">
+        <section class="drawer-section">
+          <h3>Appearance</h3>
+          <label>
+            Theme
+            <select id="theme-select">
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="drawer-section">
+          <h3>AI Model Setup</h3>
+          <div class="grid-one">
+            <label>
+              Provider
+              <select id="scan-provider">
+                <option value="ollama">Ollama (Local)</option>
+                <option value="bedrock">AWS Bedrock</option>
+              </select>
+            </label>
+            <label>
+              Model
+              <div class="row-inline">
+                <select id="scan-model-select"></select>
+                <button id="refresh-models-btn" type="button" class="ghost">Refresh</button>
+              </div>
+            </label>
+            <label>
+              Or Custom Model
+              <input id="scan-model-custom" type="text" placeholder="qwen2.5:14b" />
+            </label>
+            <label>
+              Ollama URL
+              <input id="ollama-url" type="text" value="http://localhost:11434" />
+            </label>
+            <label>
+              Bedrock Region
+              <input id="bedrock-region" type="text" value="us-east-1" />
+            </label>
+            <label>
+              Bedrock Profile
+              <input id="bedrock-profile" type="text" value="sci_bedrock" />
+            </label>
+          </div>
+
+          <div class="actions wrap compact">
+            <button id="runtime-start-btn" type="button">Start Runtime</button>
+            <button id="runtime-stop-btn" type="button" class="ghost">Stop Runtime</button>
+            <button id="runtime-stop-full-btn" type="button" class="ghost">Stop Runtime + App</button>
+            <button id="pull-model-btn" type="button" class="ghost">Pull Selected Model</button>
+          </div>
+        </section>
+
+        <section class="drawer-section">
+          <h3>Advanced Paths</h3>
+          <div class="grid-one">
+            <label>
+              Reports Directory
+              <div class="path-input">
+                <input id="reports-dir" type="text" placeholder="/path/to/reports" />
+                <button id="pick-reports-dir-btn" type="button" class="ghost">Browse</button>
+              </div>
+            </label>
+            <label>
+              Learning Pair Mode
+              <select id="learn-pair-mode">
+                <option value="consecutive">Consecutive (v0.1 -> ... -> v1.0+)</option>
+                <option value="latest">First -> Latest</option>
+              </select>
+              <span class="field-help">Consecutive keeps pairing each adjacent version until the latest available file.</span>
+            </label>
+            <label>
+              Track Changes Influence
+              <select id="learn-track-weight">
+                <option value="1">Low</option>
+                <option value="2" selected>Balanced (Recommended)</option>
+                <option value="4">Strong</option>
+              </select>
+              <span class="field-help">How strongly Track Changes affect learned patterns during auto-learn.</span>
+            </label>
+            <label>
+              <input id="learn-track-changes" type="checkbox" checked /> Use Word Track Changes During Auto-Learn
+            </label>
+            <label>
+              <input id="rebuild-ai-compare" type="checkbox" /> Use AI Compare During Rebuild
+            </label>
+            <div class="actions">
+              <button id="rebuild-learning-btn" type="button" class="ghost">Rebuild Learning Profile</button>
+              <div id="rebuild-learning-status" class="inline-status idle">
+                <span class="dot"></span>
+                <span id="rebuild-learning-status-text">Idle</span>
+              </div>
+            </div>
+            <label>
+              Ignore Config
+              <div class="path-input">
+                <input id="ignore-config" type="text" placeholder="/path/to/draftenheimer_ignore.json" />
+                <button id="pick-ignore-config-btn" type="button" class="ghost">Browse</button>
+              </div>
+            </label>
+            <label>
+              Feedback Config
+              <div class="path-input">
+                <input id="feedback-config" type="text" placeholder="/path/to/draftenheimer_feedback.json" />
+                <button id="pick-feedback-config-btn" type="button" class="ghost">Browse</button>
+              </div>
+            </label>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </body>
+</html>

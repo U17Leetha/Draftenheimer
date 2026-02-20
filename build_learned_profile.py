@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Draftenheimer learned QA profile from v0.1/v1.0 report pairs."""
+"""Build Draftenheimer learned QA profile from versioned report pairs."""
 
 from __future__ import annotations
 
@@ -10,30 +10,43 @@ import os
 import re
 import subprocess
 import tempfile
+import zipfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
-from qa_scan import parse_docx
+from qa_scan import NS, parse_docx
 
-OLD_VER_RE = re.compile(r"(?i)(v0\.1|0\.1v)")
-NEW_VER_RE = re.compile(r"(?i)(v1\.0|1\.0v)")
+VERSION_TOKEN_RE = re.compile(r"(?i)(?:^|[^a-z0-9])v?(\d+)\.(\d+)(?:v)?(?:$|[^a-z0-9])")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 WORD_RE = re.compile(r"[A-Za-z']+")
 
 
+def parse_version(stem: str) -> tuple[int, int] | None:
+    matches = list(VERSION_TOKEN_RE.finditer(stem))
+    if not matches:
+        return None
+    # Use the last version token in the filename stem.
+    m = matches[-1]
+    return int(m.group(1)), int(m.group(2))
+
+
+def strip_version_tokens(stem: str) -> str:
+    return VERSION_TOKEN_RE.sub(" ", stem)
+
+
 def canonical_report_key(file_path: Path) -> str | None:
     stem = file_path.stem
-    if not OLD_VER_RE.search(stem) and not NEW_VER_RE.search(stem):
+    if parse_version(stem) is None:
         return None
-    stem = OLD_VER_RE.sub("", stem)
-    stem = NEW_VER_RE.sub("", stem)
+    stem = strip_version_tokens(stem)
     stem = re.sub(r"[\W_]+", "", stem).lower()
     return stem or None
 
 
-def discover_pairs(reports_dir: Path) -> list[tuple[Path, Path]]:
-    pairs: dict[str, dict[str, Path]] = {}
+def discover_pairs(reports_dir: Path, pair_mode: str = "consecutive") -> list[tuple[Path, Path]]:
+    versioned: dict[str, list[tuple[tuple[int, int], Path]]] = defaultdict(list)
     if not reports_dir.exists():
         return []
     for file_path in sorted(reports_dir.iterdir()):
@@ -42,18 +55,67 @@ def discover_pairs(reports_dir: Path) -> list[tuple[Path, Path]]:
         key = canonical_report_key(file_path)
         if not key:
             continue
-        bucket = pairs.setdefault(key, {})
-        stem = file_path.stem
-        if OLD_VER_RE.search(stem):
-            bucket["old"] = file_path
-        if NEW_VER_RE.search(stem):
-            bucket["new"] = file_path
+        version = parse_version(file_path.stem)
+        if version is None:
+            continue
+        versioned[key].append((version, file_path))
 
     out: list[tuple[Path, Path]] = []
-    for versions in pairs.values():
-        if "old" in versions and "new" in versions:
-            out.append((versions["old"], versions["new"]))
+    for items in versioned.values():
+        if len(items) < 2:
+            continue
+        items = sorted(items, key=lambda x: (x[0][0], x[0][1], x[1].name.lower()))
+        if pair_mode == "latest":
+            out.append((items[0][1], items[-1][1]))
+            continue
+        # Default: learn every step (v0.1->v0.2->v0.3...)
+        for i in range(len(items) - 1):
+            out.append((items[i][1], items[i + 1][1]))
     return sorted(out, key=lambda p: p[0].name.lower())
+
+
+def _revision_text(node, deleted: bool) -> str:
+    pieces = []
+    if deleted:
+        for t in node.findall('.//w:delText', NS):
+            if t.text:
+                pieces.append(t.text)
+    else:
+        for t in node.findall('.//w:t', NS):
+            if t.text:
+                pieces.append(t.text)
+    return re.sub(r"\s+", " ", "".join(pieces)).strip()
+
+
+def extract_track_changes(docx_path: Path) -> dict:
+    out = {"inserted": [], "deleted": [], "replacements": []}
+    try:
+        with zipfile.ZipFile(docx_path) as zf:
+            with zf.open('word/document.xml') as f:
+                root = ET.parse(f).getroot()
+    except Exception:
+        return out
+
+    body = root.find('w:body', NS)
+    if body is None:
+        return out
+
+    for p in body.findall('w:p', NS):
+        pending_deleted: list[str] = []
+        for child in p.iter():
+            tag = child.tag.split('}')[-1]
+            if tag == 'del':
+                txt = _revision_text(child, deleted=True)
+                if txt:
+                    out['deleted'].append(txt)
+                    pending_deleted.append(txt)
+            elif tag == 'ins':
+                txt = _revision_text(child, deleted=False)
+                if txt:
+                    out['inserted'].append(txt)
+                    if pending_deleted:
+                        out['replacements'].append({'from': pending_deleted.pop(0), 'to': txt})
+    return out
 
 
 def paragraphs_from_docx(path: Path) -> list[str]:
@@ -270,6 +332,8 @@ def build_profile(
     bedrock_profile: str,
     ollama_url: str,
     min_ai_votes: int,
+    include_track_changes: bool,
+    track_weight: int,
 ) -> dict:
     sentence_old = Counter()
     sentence_new = Counter()
@@ -283,6 +347,7 @@ def build_profile(
     ai_rewrite_examples: dict[str, tuple[str, str, str]] = {}
     ai_style_votes = Counter()
     sources: list[dict[str, str]] = []
+    track_change_totals = {"inserted": 0, "deleted": 0, "replacements": 0}
 
     for old_path, new_path in pairs:
         old_paras = paragraphs_from_docx(old_path)
@@ -303,6 +368,38 @@ def build_profile(
 
         collect_case_normalization(old_paras, new_paras, case_votes)
         collect_rewrites(old_text, new_text, rewrite_votes, rewrite_examples)
+
+        if include_track_changes:
+            for tracked in (extract_track_changes(old_path), extract_track_changes(new_path)):
+                inserted = tracked.get('inserted', [])
+                deleted = tracked.get('deleted', [])
+                replacements = tracked.get('replacements', [])
+                track_change_totals['inserted'] += len(inserted)
+                track_change_totals['deleted'] += len(deleted)
+                track_change_totals['replacements'] += len(replacements)
+
+                for s in inserted:
+                    for sentence in split_sentences(s):
+                        sentence_new[norm_text(sentence)] += max(1, track_weight)
+                    words = WORD_RE.findall(s.lower())
+                    for n in range(ngram_min, ngram_max + 1):
+                        ngram_new.update(ngrams(words, n))
+
+                for s in deleted:
+                    for sentence in split_sentences(s):
+                        sentence_old[norm_text(sentence)] += max(1, track_weight)
+                    words = WORD_RE.findall(s.lower())
+                    for n in range(ngram_min, ngram_max + 1):
+                        ngram_old.update(ngrams(words, n))
+
+                for r in replacements:
+                    old_s = (r.get('from') or '').strip()
+                    new_s = (r.get('to') or '').strip()
+                    if not old_s or not new_s or old_s == new_s:
+                        continue
+                    key = f"{norm_text(old_s)}|||{norm_text(new_s)}"
+                    rewrite_votes[key] += max(1, track_weight)
+                    rewrite_examples.setdefault(key, (old_s, new_s))
 
         if ai_compare and ai_model:
             ai_result = _ai_pair_patterns(old_text, new_text, ai_provider, ai_model, bedrock_region, bedrock_profile, ollama_url)
@@ -377,6 +474,9 @@ def build_profile(
         "ai_compare_model": ai_model if ai_compare else None,
         "ai_deprecated_phrases": ai_deprecated_phrases,
         "ai_style_rules": ai_style_rules,
+        "track_changes_enabled": include_track_changes,
+        "track_changes_weight": track_weight,
+        "track_changes_totals": track_change_totals,
     }
 
 
@@ -394,8 +494,9 @@ def default_reports_dir() -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build Draftenheimer learned QA profile from report pairs.")
-    parser.add_argument("--reports-dir", default=default_reports_dir(), help="Directory containing v0.1/v1.0 report pairs.")
+    parser = argparse.ArgumentParser(description="Build Draftenheimer learned QA profile from versioned report pairs.")
+    parser.add_argument("--reports-dir", default=default_reports_dir(), help="Directory containing versioned report files (v0.1, v0.2, v0.3, ...).")
+    parser.add_argument("--pair-mode", choices=["consecutive", "latest"], default="consecutive", help="consecutive: v0.1->v0.2->v0.3 (default). latest: first->latest only.")
     parser.add_argument("--out", default="draftenheimer_profile.json", help="Output profile JSON path.")
     parser.add_argument("--min-drop", type=int, default=4)
     parser.add_argument("--min-len", type=int, default=20)
@@ -409,16 +510,19 @@ def main() -> None:
     parser.add_argument("--bedrock-profile", default="sci_bedrock")
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--min-ai-votes", type=int, default=2)
-    parser.add_argument("--allow-empty", action="store_true", help="Exit successfully when no v0.1/v1.0 pairs are found.")
+    parser.add_argument("--include-track-changes", action="store_true", default=True, help="Use Word tracked insert/delete changes as extra learning signals.")
+    parser.add_argument("--no-track-changes", action="store_false", dest="include_track_changes", help="Disable tracked-change learning.")
+    parser.add_argument("--track-weight", type=int, default=2, help="Weight applied to tracked-change signals (default: 2).")
+    parser.add_argument("--allow-empty", action="store_true", help="Exit successfully when no versioned pairs are found.")
     args = parser.parse_args()
 
     reports_dir = Path(args.reports_dir)
-    pairs = discover_pairs(reports_dir)
+    pairs = discover_pairs(reports_dir, pair_mode=args.pair_mode)
     if not pairs:
         if args.allow_empty:
-            print(f"No v0.1/v1.0 pairs found in: {reports_dir}. Skipping profile rebuild.")
+            print(f"No versioned report pairs found in: {reports_dir}. Skipping profile rebuild.")
             raise SystemExit(0)
-        raise SystemExit(f"No v0.1/v1.0 pairs found in: {reports_dir}")
+        raise SystemExit(f"No versioned report pairs found in: {reports_dir}")
     if args.ai_compare and not args.ai_model:
         raise SystemExit("--ai-compare requires --ai-model")
 
@@ -436,6 +540,8 @@ def main() -> None:
         bedrock_profile=args.bedrock_profile,
         ollama_url=args.ollama_url,
         min_ai_votes=args.min_ai_votes,
+        include_track_changes=args.include_track_changes,
+        track_weight=args.track_weight,
     )
 
     out_path = Path(args.out)
@@ -446,6 +552,9 @@ def main() -> None:
     print(f"Profile written: {out_path}")
     print(f"Deprecated ngrams: {len(profile['deprecated_ngrams'])}")
     print(f"Preferred rewrites: {len(profile['preferred_rewrites'])}")
+    if args.include_track_changes:
+        t = profile.get('track_changes_totals', {})
+        print(f"Track changes (ins/del/repl): {t.get('inserted', 0)}/{t.get('deleted', 0)}/{t.get('replacements', 0)}")
     if args.ai_compare:
         print(f"AI deprecated phrases: {len(profile.get('ai_deprecated_phrases', []))}")
         print(f"AI style rules: {len(profile.get('ai_style_rules', []))}")

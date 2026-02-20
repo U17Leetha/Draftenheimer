@@ -566,7 +566,13 @@ def _augment_llm_message_with_counts(message, text):
     if not message or not text:
         return message, 0
     msg_l = message.lower()
-    if 'overused phrase' not in msg_l and 'overused phrases' not in msg_l:
+    if (
+        'overused phrase' not in msg_l
+        and 'overused phrases' not in msg_l
+        and 'avoid using' not in msg_l
+        and 'avoid' not in msg_l
+        and 'phrasing' not in msg_l
+    ):
         return message, 0
 
     counts = []
@@ -594,6 +600,110 @@ def _elevate_severity_for_repeat_count(severity, max_count):
     if max_count >= 3 and s == 'suggestion':
         return 'warning'
     return s
+
+
+def _message_is_phrase_repetition_warning(message):
+    if not message:
+        return False
+    msg_l = message.lower()
+    if not _extract_quoted_phrases(message):
+        return False
+    if 'overused phrase' in msg_l or 'overused phrases' in msg_l:
+        return True
+    if 'avoid using' in msg_l and 'phrasing' in msg_l:
+        return True
+    return False
+
+
+def _tokens_for_overlap(text):
+    words = re.findall(r'[a-z0-9]+', str(text or '').lower())
+    stop = {
+        'the', 'and', 'for', 'with', 'from', 'that', 'this', 'was', 'were',
+        'are', 'is', 'to', 'of', 'in', 'on', 'by', 'or', 'a', 'an', 'as',
+        'avoid', 'using', 'phrase', 'phrasing', 'consider', 'rephrasing',
+        'obvious', 'redundant', 'information', 'stating', 'remove', 'review',
+    }
+    return {w for w in words if len(w) > 2 and w not in stop}
+
+
+def _best_supporting_sentence(text, message=None, location_hint=None):
+    sentences = split_sentences(text or '')
+    if not sentences:
+        return ''
+
+    quoted = _extract_quoted_phrases(message or '')
+    for q in quoted:
+        for s in sentences:
+            if re.search(re.escape(q), s, flags=re.IGNORECASE):
+                return s
+
+    target_tokens = set()
+    target_tokens.update(_tokens_for_overlap(location_hint or ''))
+    target_tokens.update(_tokens_for_overlap(message or ''))
+
+    best = ''
+    best_score = -1
+    for s in sentences:
+        st = _tokens_for_overlap(s)
+        if not st:
+            continue
+        score = len(target_tokens.intersection(st)) if target_tokens else 0
+        if score > best_score:
+            best_score = score
+            best = s
+
+    return best or sentences[0]
+
+
+def _augment_vague_llm_message(message, text, location_hint=None):
+    if not message or not text:
+        return message
+    msg_l = message.lower()
+    if not any(k in msg_l for k in ('obvious', 'redundant', 'stating the obvious')):
+        return message
+    if 'sentence:' in msg_l or 'excerpt:' in msg_l:
+        return message
+
+    sentence = _best_supporting_sentence(text, message=message, location_hint=location_hint)
+    if not sentence:
+        return message
+    snippet = sentence.strip().replace('\n', ' ')
+    if len(snippet) > 220:
+        snippet = snippet[:217] + '...'
+    return f"{message} Example sentence: \"{snippet}\""
+
+
+def _llm_issue_supported_by_text(message, text):
+    if not message or not text:
+        return True
+
+    msg = (
+        message.replace('“', '"')
+               .replace('”', '"')
+               .replace('‘', "'")
+               .replace('’', "'")
+    )
+
+    patterns = [
+        r'instead of\s+[\'"]([^\'"]+)[\'"]',
+        r'replace\s+[\'"]([^\'"]+)[\'"]\s+with',
+        r'rather than\s+[\'"]([^\'"]+)[\'"]',
+    ]
+
+    old_phrases = []
+    for pat in patterns:
+        for m in re.finditer(pat, msg, flags=re.IGNORECASE):
+            phrase = (m.group(1) or '').strip()
+            if phrase:
+                old_phrases.append(phrase)
+
+    if not old_phrases:
+        return True
+
+    for phrase in old_phrases:
+        if _count_phrase_occurrences(text, phrase) > 0:
+            return True
+    return False
 
 
 def _extract_json_array_from_text(text):
@@ -1050,10 +1160,11 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                 prompt = (
                     "You are a QA reviewer for penetration testing reports. "
                     "Review the narrative text for clarity, flow, professionalism, and repetition. "
-                    "Use correction patterns learned from prior v0.1->v1.0 report revisions when provided. "
+                    "Use correction patterns learned from prior versioned report revisions when provided. "
                     "Do NOT challenge technical conclusions. "
                     "Return JSON array of issues with fields: severity (error|warning|suggestion), "
                     "message (actionable), and location_hint (short). "
+                    "For any rewrite/substitution suggestion (for example 'use X instead of Y'), only suggest Y if it appears verbatim in the provided text. "
                     "If no issues, return empty array. "
                     "Return JSON only."
                 )
@@ -1144,13 +1255,20 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                             continue
                         base_severity = it.get('severity', 'suggestion')
                         base_message = it.get('message', 'Narrative issue detected.')
+                        if not _llm_issue_supported_by_text(base_message, narrative):
+                            continue
+                        location_hint = it.get('location_hint', 'Narrative')
                         counted_message, max_count = _augment_llm_message_with_counts(base_message, narrative)
+                        if _message_is_phrase_repetition_warning(base_message) and max_count <= 3:
+                            # Only flag phrase-style warnings when the phrase is truly repeated.
+                            continue
+                        final_message = _augment_vague_llm_message(counted_message, narrative, location_hint)
                         final_severity = _elevate_severity_for_repeat_count(base_severity, max_count)
                         diagnostics.append({
                             'severity': final_severity,
                             'code': 'LLM-NARR-001',
-                            'message': counted_message,
-                            'location': {'section': it.get('location_hint', 'Narrative')},
+                            'message': final_message,
+                            'location': {'section': location_hint},
                             'source': 'ai_review',
                         })
                 else:
@@ -1325,7 +1443,24 @@ def main():
     ap.add_argument(
         '--reports-dir',
         default=str(Path(__file__).resolve().parent / 'reports'),
-        help='Directory containing v0.1/v1.0 report pairs for learned profile rebuild.',
+        help='Directory containing versioned report files for learned profile rebuild.',
+    )
+    ap.add_argument(
+        '--learn-pair-mode',
+        choices=['consecutive', 'latest'],
+        default='consecutive',
+        help='Auto-learn pairing mode for versioned reports.',
+    )
+    ap.add_argument(
+        '--learn-track-weight',
+        type=int,
+        default=2,
+        help='Weight for Track Changes learning signals when rebuilding profile.',
+    )
+    ap.add_argument(
+        '--learn-no-track-changes',
+        action='store_true',
+        help='Disable Track Changes as an auto-learn signal when rebuilding profile.',
     )
     ap.add_argument(
         '--test-bedrock',
@@ -1386,7 +1521,14 @@ def main():
             str(script_path),
             '--reports-dir',
             args.reports_dir,
+            '--pair-mode',
+            args.learn_pair_mode,
+            '--track-weight',
+            str(max(1, int(args.learn_track_weight))),
         ]
+
+        if args.learn_no_track_changes:
+            rebuild_cmd.append('--no-track-changes')
 
         if args.auto_learn:
             rebuild_cmd.append('--allow-empty')
