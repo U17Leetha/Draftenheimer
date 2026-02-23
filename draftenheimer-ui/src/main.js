@@ -35,6 +35,7 @@ function bind() {
   el.scanLlmPull = $("scan-llm-pull");
   el.scanAutoLearn = $("scan-auto-learn");
   el.scanAutoLearnAi = $("scan-auto-learn-ai");
+  el.scanRubricScore = $("scan-rubric-score");
   el.scanAnnotate = $("scan-annotate");
   el.scanOpenOutput = $("scan-open-output");
   el.scanRevealOutput = $("scan-reveal-output");
@@ -60,6 +61,7 @@ function bind() {
   el.learnTrackWeight = $("learn-track-weight");
   el.learnTrackChanges = $("learn-track-changes");
   el.rebuildAiCompare = $("rebuild-ai-compare");
+  el.rebuildMode = $("rebuild-mode");
   el.rebuildLearningBtn = $("rebuild-learning-btn");
   el.rebuildLearningStatus = $("rebuild-learning-status");
   el.rebuildLearningStatusText = $("rebuild-learning-status-text");
@@ -170,6 +172,7 @@ function restorePersistedSettings() {
   el.learnTrackWeight.value = loadSetting("learn_track_weight", el.learnTrackWeight.value || "2");
   el.learnTrackChanges.checked = loadBoolSetting("learn_track_changes", true);
   el.rebuildAiCompare.checked = loadBoolSetting("rebuild_ai_compare", false);
+  el.rebuildMode.value = loadSetting("rebuild_mode", el.rebuildMode.value || "incremental");
 
   el.scanProvider.value = loadSetting("scan_provider", el.scanProvider.value || "ollama");
   el.scanModelCustom.value = loadSetting("scan_model_custom", el.scanModelCustom.value || "");
@@ -178,6 +181,7 @@ function restorePersistedSettings() {
   el.scanLlmPull.checked = loadBoolSetting("scan_llm_pull", false);
   el.scanAutoLearn.checked = loadBoolSetting("scan_auto_learn", true);
   el.scanAutoLearnAi.checked = loadBoolSetting("scan_auto_learn_ai", false);
+  el.scanRubricScore.checked = loadBoolSetting("scan_rubric_score", true);
   el.scanAnnotate.checked = loadBoolSetting("scan_annotate", true);
   el.scanOpenOutput.checked = loadBoolSetting("scan_open_output", false);
   el.scanRevealOutput.checked = loadBoolSetting("scan_reveal_output", false);
@@ -201,6 +205,7 @@ function wireSettingsPersistence() {
     [el.learnPairMode, "learn_pair_mode"],
     [el.learnTrackWeight, "learn_track_weight"],
     [el.scanProvider, "scan_provider"],
+    [el.rebuildMode, "rebuild_mode"],
   ];
   for (const [node, key] of selectFields) {
     node.addEventListener("change", () => saveSetting(key, node.value));
@@ -213,6 +218,7 @@ function wireSettingsPersistence() {
     [el.scanLlmPull, "scan_llm_pull"],
     [el.scanAutoLearn, "scan_auto_learn"],
     [el.scanAutoLearnAi, "scan_auto_learn_ai"],
+    [el.scanRubricScore, "scan_rubric_score"],
     [el.scanAnnotate, "scan_annotate"],
     [el.scanOpenOutput, "scan_open_output"],
     [el.scanRevealOutput, "scan_reveal_output"],
@@ -526,6 +532,7 @@ async function runScan() {
       llmPull: !!el.scanLlmPull.checked,
       autoLearn: !!el.scanAutoLearn.checked,
       autoLearnAi: !!el.scanAutoLearnAi.checked,
+      includeRubricScore: !!el.scanRubricScore.checked,
       annotate: !!el.scanAnnotate.checked,
       jsonOut: el.scanJsonOut.value.trim() || null,
       annotateOut: el.scanAnnotateOut.value.trim() || null,
@@ -572,6 +579,7 @@ async function rebuildLearningProfile() {
       trackChanges: !!el.learnTrackChanges?.checked,
       trackWeight: Number.parseInt(el.learnTrackWeight?.value || "2", 10) || 2,
       aiCompare,
+      rebuildMode: el.rebuildMode?.value || "incremental",
       provider: el.scanProvider.value,
       model: model || null,
       ollamaUrl: el.ollamaUrl.value.trim() || null,

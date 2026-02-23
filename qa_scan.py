@@ -14,7 +14,8 @@ import os as _os
 from pathlib import Path
 
 NS = {
-    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
 }
 
 
@@ -120,6 +121,113 @@ def parse_docx(docx_path):
                     'rows': rows,
                 })
     return blocks
+
+
+def detect_blank_page_indicators(docx_path):
+    """Best-effort detection of likely blank pages via consecutive page breaks with no content."""
+    try:
+        with zipfile.ZipFile(docx_path) as zf:
+            with zf.open('word/document.xml') as f:
+                tree = ET.parse(f)
+        root = tree.getroot()
+    except Exception:
+        return 0
+
+    body = root.find('w:body', NS)
+    if body is None:
+        return 0
+
+    blank_indicators = 0
+    had_content_since_break = True
+    for p in body.findall('w:p', NS):
+        text = _text_from_p(p).strip()
+        has_page_break = bool(
+            p.findall('.//w:br[@w:type="page"]', NS)
+            or p.findall('.//w:lastRenderedPageBreak', NS)
+        )
+        if has_page_break:
+            if not had_content_since_break:
+                blank_indicators += 1
+            had_content_since_break = False
+            continue
+        if text:
+            had_content_since_break = True
+    return blank_indicators
+
+
+def extract_format_snapshot(docx_path):
+    """Collect lightweight formatting/layout signals from a DOCX."""
+    out = {
+        'paragraph_style_counts': {},
+        'paragraph_alignment_counts': {},
+        'table_column_counts': {},
+        'image_width_emu': [],
+        'image_aspect_ratios': [],
+        'paragraph_count': 0,
+        'table_count': 0,
+        'image_count': 0,
+    }
+    try:
+        with zipfile.ZipFile(docx_path) as zf:
+            with zf.open('word/document.xml') as f:
+                tree = ET.parse(f)
+        root = tree.getroot()
+    except Exception:
+        return out
+
+    p_styles = Counter()
+    p_align = Counter()
+    tbl_cols = Counter()
+    widths = []
+    aspects = []
+
+    body = root.find('w:body', NS)
+    if body is None:
+        return out
+
+    for p in body.findall('.//w:p', NS):
+        style_id = _style_id_from_p(p) or '(no-style)'
+        p_styles[style_id] += 1
+        ppr = p.find('w:pPr', NS)
+        jc_val = None
+        if ppr is not None:
+            jc = ppr.find('w:jc', NS)
+            if jc is not None:
+                jc_val = jc.get(f'{{{NS["w"]}}}val')
+        p_align[(jc_val or 'default').lower()] += 1
+
+    for tbl in body.findall('.//w:tbl', NS):
+        col_count = 0
+        grid = tbl.find('w:tblGrid', NS)
+        if grid is not None:
+            col_count = len(grid.findall('w:gridCol', NS))
+        if col_count == 0:
+            first_row = tbl.find('w:tr', NS)
+            if first_row is not None:
+                col_count = len(first_row.findall('w:tc', NS))
+        if col_count > 0:
+            tbl_cols[col_count] += 1
+
+    for ext in body.findall('.//wp:extent', NS):
+        try:
+            cx = int(ext.get('cx', '0'))
+            cy = int(ext.get('cy', '0'))
+        except ValueError:
+            continue
+        if cx <= 0 or cy <= 0:
+            continue
+        widths.append(cx)
+        aspects.append(round(cx / cy, 4))
+
+    out['paragraph_style_counts'] = dict(p_styles)
+    out['paragraph_alignment_counts'] = dict(p_align)
+    out['table_column_counts'] = dict(tbl_cols)
+    out['image_width_emu'] = widths
+    out['image_aspect_ratios'] = aspects
+    out['paragraph_count'] = sum(p_styles.values())
+    out['table_count'] = sum(tbl_cols.values())
+    out['image_count'] = len(widths)
+    return out
 
 
 def build_sections(paragraphs):
@@ -379,6 +487,35 @@ def normalize_for_substring(s):
     return s
 
 
+def _rewrite_tokens(text):
+    words = re.findall(r"[a-z0-9']+", str(text or '').lower())
+    stop = {
+        'the', 'a', 'an', 'and', 'or', 'to', 'of', 'in', 'on', 'for', 'with',
+        'by', 'from', 'as', 'is', 'are', 'was', 'were', 'be', 'that', 'this',
+    }
+    return [w for w in words if w and w not in stop]
+
+
+def _rewrite_rule_is_high_signal(old_text, new_text):
+    if '\n' in str(old_text) or '\n' in str(new_text):
+        return False
+    old_toks = _rewrite_tokens(old_text)
+    new_toks = _rewrite_tokens(new_text)
+    if len(old_toks) < 2 or len(new_toks) < 2:
+        return False
+
+    old_set = set(old_toks)
+    new_set = set(new_toks)
+    overlap = old_set.intersection(new_set)
+
+    # Keep sentence-level rewrites only when there is meaningful lexical overlap.
+    if len(old_toks) >= 6 and len(new_toks) >= 6 and len(overlap) < 2:
+        return False
+    if len(overlap) == 0:
+        return False
+    return True
+
+
 def _load_ignore_config(path):
     default = {
         'ignore_deprecated_phrases': [],
@@ -610,7 +747,11 @@ def _message_is_phrase_repetition_warning(message):
         return False
     if 'overused phrase' in msg_l or 'overused phrases' in msg_l:
         return True
+    if 'overused' in msg_l and 'phras' in msg_l:
+        return True
     if 'avoid using' in msg_l and 'phrasing' in msg_l:
+        return True
+    if 'repetition' in msg_l and 'phrase' in msg_l:
         return True
     return False
 
@@ -706,14 +847,14 @@ def _llm_issue_supported_by_text(message, text):
     return False
 
 
-def _extract_json_array_from_text(text):
+def _extract_json_payload_from_text(text):
     if not text:
         return None
     s = text.strip()
-    # 1) Direct JSON array.
+    # 1) Direct JSON payload (array or object).
     try:
         obj = json.loads(s)
-        if isinstance(obj, list):
+        if isinstance(obj, (list, dict)):
             return obj
     except Exception:
         pass
@@ -723,7 +864,7 @@ def _extract_json_array_from_text(text):
         candidate = m.group(1).strip()
         try:
             obj = json.loads(candidate)
-            if isinstance(obj, list):
+            if isinstance(obj, (list, dict)):
                 return obj
         except Exception:
             continue
@@ -762,6 +903,18 @@ def _extract_json_array_from_text(text):
                     break
         start = s.find('[', start + 1)
     return None
+
+
+def _rubric_rating(score):
+    try:
+        v = int(score)
+    except Exception:
+        return 'Weak'
+    if v >= 19:
+        return 'Strong'
+    if v >= 10:
+        return 'Fair'
+    return 'Weak'
 
 
 def detect_repetition(paragraphs, min_len=60, min_count=3):
@@ -955,9 +1108,36 @@ def test_bedrock_connection(model, bedrock_region="us-east-1", bedrock_profile="
                 pass
 
 
-def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, llm_pull=False, bedrock_region="us-east-1", bedrock_profile="sci_bedrock", ignore_config_path=None, feedback_config_path=None):
+def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, llm_pull=False, bedrock_region="us-east-1", bedrock_profile="sci_bedrock", ignore_config_path=None, feedback_config_path=None, include_rubric_score=True):
     blocks = parse_docx(docx_path)
     paragraphs = [b for b in blocks if b['type'] == 'p']
+    style_examples = {}
+    for p in paragraphs:
+        sid = p.get('style_id') or '(no-style)'
+        txt = p.get('text', '').strip()
+        if txt and sid not in style_examples:
+            style_examples[sid] = txt
+
+    table_col_examples = {}
+    for b in blocks:
+        if b['type'] != 'tbl':
+            continue
+        rows = b.get('rows', []) or []
+        if not rows:
+            continue
+        cols = max((len(r) for r in rows), default=0)
+        if cols <= 0 or cols in table_col_examples:
+            continue
+        first_cell = ''
+        for r in rows:
+            for c in r:
+                if str(c).strip():
+                    first_cell = str(c).strip()
+                    break
+            if first_cell:
+                break
+        table_col_examples[cols] = first_cell
+
     table_texts = []
     for b in blocks:
         if b['type'] != 'tbl':
@@ -970,6 +1150,29 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
     findings = find_findings(blocks)
 
     diagnostics = []
+    rubric_scores = None
+
+    # Likely blank-page detection (best effort from DOCX page-break structure).
+    blank_page_count = detect_blank_page_indicators(docx_path)
+    if blank_page_count > 0:
+        diagnostics.append({
+            'severity': 'warning',
+            'code': 'DOC-FMT-PAGE-001',
+            'message': f'Likely blank page(s) detected around manual page breaks (count {blank_page_count}).',
+            'location': {'section': 'Document'},
+        })
+
+    # Ensure common list/index pages are styled as headings so they appear in TOC/index structures.
+    for p in paragraphs:
+        txt = p.get('text', '').strip().lower()
+        if txt in ('list of figures', 'list of tables', 'table of contents'):
+            if not p.get('heading_level'):
+                diagnostics.append({
+                    'severity': 'suggestion',
+                    'code': 'DOC-FMT-INDEX-001',
+                    'message': f'"{p.get("text", "")}" is not using a heading style; it may not appear correctly in the index/TOC.',
+                    'location': {'section': 'Document', 'text': p.get('text', '')[:120]},
+                })
     if not ignore_config_path:
         ignore_config_path = os.path.join(os.path.dirname(__file__), 'draftenheimer_ignore.json')
     ignore_cfg = _load_ignore_config(ignore_config_path)
@@ -1081,6 +1284,8 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                 new_text = rule.get('to', '')
                 if not old_text or not new_text:
                     continue
+                if not _rewrite_rule_is_high_signal(old_text, new_text):
+                    continue
                 if _matches_any_phrase(old_text, ignore_rewrites):
                     continue
                 if _rewrite_key(old_text, new_text) in rejected_rewrite_keys:
@@ -1088,12 +1293,91 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                 old_norm = normalize_for_substring(old_text)
                 new_norm = normalize_for_substring(new_text)
                 if old_norm and old_norm in normalized_full and new_norm not in normalized_full:
+                    loc = {'section': 'Document'}
+                    if len(old_text) >= 8:
+                        loc['text'] = old_text[:120]
                     diagnostics.append({
                         'severity': 'suggestion',
                         'code': 'DOC-STYLE-REWRITE-001',
                         'message': f'Preferred rewrite: \"{old_text}\" -> \"{new_text}\"',
-                        'location': {'section': 'Document'},
+                        'location': loc,
                     })
+
+            # Learned formatting/layout checks.
+            fmt_rules = profile.get('format_rules', {}) if isinstance(profile, dict) else {}
+            if isinstance(fmt_rules, dict) and fmt_rules:
+                snapshot = extract_format_snapshot(docx_path)
+
+                preferred_styles = {
+                    x.get('style_id')
+                    for x in fmt_rules.get('preferred_paragraph_styles', [])
+                    if isinstance(x, dict) and x.get('style_id')
+                }
+                if preferred_styles:
+                    unexpected_styles = []
+                    for style_id, count in snapshot.get('paragraph_style_counts', {}).items():
+                        if count < 3:
+                            continue
+                        if style_id not in preferred_styles:
+                            unexpected_styles.append((style_id, count))
+                    if unexpected_styles:
+                        unexpected_styles.sort(key=lambda x: x[1], reverse=True)
+                        details = ', '.join(f'{sid} ({cnt}x)' for sid, cnt in unexpected_styles[:4])
+                        loc = {'section': 'Document'}
+                        top_style = unexpected_styles[0][0]
+                        if top_style in style_examples:
+                            loc['text'] = style_examples[top_style][:120]
+                        diagnostics.append({
+                            'severity': 'suggestion',
+                            'code': 'DOC-FMT-PARA-001',
+                            'message': f'Paragraph styles outside learned baseline: {details}.',
+                            'location': loc,
+                        })
+
+                preferred_tbl_cols = {
+                    int(x.get('columns'))
+                    for x in fmt_rules.get('preferred_table_column_counts', [])
+                    if isinstance(x, dict) and str(x.get('columns', '')).isdigit()
+                }
+                if preferred_tbl_cols:
+                    unexpected_tbl = []
+                    for cols, count in snapshot.get('table_column_counts', {}).items():
+                        cols_i = int(cols)
+                        if count < 2:
+                            continue
+                        if cols_i not in preferred_tbl_cols:
+                            unexpected_tbl.append((cols_i, count))
+                    if unexpected_tbl:
+                        unexpected_tbl.sort(key=lambda x: x[1], reverse=True)
+                        details = ', '.join(f'{cols} cols ({cnt}x)' for cols, cnt in unexpected_tbl[:4])
+                        loc = {'section': 'Document'}
+                        top_cols = unexpected_tbl[0][0]
+                        ex = table_col_examples.get(top_cols, '')
+                        if ex:
+                            loc['text'] = ex[:120]
+                        diagnostics.append({
+                            'severity': 'suggestion',
+                            'code': 'DOC-FMT-TBL-001',
+                            'message': f'Table column patterns outside learned baseline: {details}.',
+                            'location': loc,
+                        })
+
+                img_rule = fmt_rules.get('image_width_emu')
+                widths = snapshot.get('image_width_emu', [])
+                if isinstance(img_rule, dict) and widths:
+                    min_w = img_rule.get('min')
+                    max_w = img_rule.get('max')
+                    if isinstance(min_w, int) and isinstance(max_w, int) and min_w > 0 and max_w >= min_w:
+                        low = int(min_w * 0.9)
+                        high = int(max_w * 1.1)
+                        outliers = [w for w in widths if w < low or w > high]
+                        if outliers:
+                            diagnostics.append({
+                                'severity': 'suggestion',
+                                'code': 'DOC-FMT-IMG-001',
+                                'message': f'Found {len(outliers)} image(s) outside learned width range ({min_w}-{max_w} EMU).',
+                                'location': {'section': 'Document'},
+                            })
 
     # Optional LLM QA (Narrative/professionalism)
     if llm and model:
@@ -1120,6 +1404,9 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                     rewrites = []
                     for r in _merge_rewrite_rules(profile.get('preferred_rewrites', []), accepted_rewrites):
                         old_t = r.get('from', '')
+                        new_t = r.get('to', '')
+                        if not _rewrite_rule_is_high_signal(old_t, new_t):
+                            continue
                         if _matches_any_phrase(old_t, ignore_rewrites):
                             continue
                         if _rewrite_key(r.get('from', ''), r.get('to', '')) in rejected_rewrite_keys:
@@ -1157,19 +1444,42 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                         if lines:
                             profile_guidance.append("AI-learned style rules:\n- " + "\n- ".join(lines))
                 guidance_text = "\n".join(profile_guidance) if profile_guidance else ""
+                rubric_guidance = (
+                    "Apply this cybersecurity writing rubric while reviewing:\n"
+                    "- LOOK: heading/navigation consistency, list quality, clean formatting, graphics/screenshot quality/captioning/references.\n"
+                    "- WORDS: clarity, concision, active voice, parallel structure, style consistency (terms/tense/numbers/pronouns), correctness/typos.\n"
+                    "- TONE: professional, constructive, tactful, solution-oriented, persuasive without fear-mongering.\n"
+                    "- INFORMATION: clear scope/objectives/constraints, prioritized findings, remediation and validation steps, methodology/tools/frameworks.\n"
+                    "- STRUCTURE: front-loaded summary, clear topic-sentence paragraphs, coherent section grouping, informative headings/TOC alignment."
+                )
+                if include_rubric_score:
+                    output_contract = (
+                        "Return JSON object only with keys: "
+                        "issues (array) and rubric_scores (object). "
+                        "rubric_scores must include look, words, tone, information, structure, each as {score:0-25,rating}."
+                    )
+                    empty_contract = "If no issues, return issues as an empty array. "
+                else:
+                    output_contract = (
+                        "Return JSON array of issues with fields: severity (error|warning|suggestion), "
+                        "message (actionable), and location_hint (short). "
+                    )
+                    empty_contract = "If no issues, return empty array. "
+
                 prompt = (
                     "You are a QA reviewer for penetration testing reports. "
                     "Review the narrative text for clarity, flow, professionalism, and repetition. "
                     "Use correction patterns learned from prior versioned report revisions when provided. "
+                    "Use the provided rubric guidance as your checklist and only report high-signal issues. "
                     "Do NOT challenge technical conclusions. "
-                    "Return JSON array of issues with fields: severity (error|warning|suggestion), "
-                    "message (actionable), and location_hint (short). "
+                    f"{output_contract} "
                     "For any rewrite/substitution suggestion (for example 'use X instead of Y'), only suggest Y if it appears verbatim in the provided text. "
-                    "If no issues, return empty array. "
+                    f"{empty_contract}"
                     "Return JSON only."
                 )
                 llm_user_content = (
                     f"Learned guidance:\n{guidance_text}\n\n"
+                    f"Rubric guidance:\n{rubric_guidance}\n\n"
                     f"Text to review:\n{narrative}"
                 )
                 if provider == "ollama":
@@ -1248,7 +1558,28 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
                 else:
                     content = "[]"
 
-                issues = _extract_json_array_from_text(content)
+                payload = _extract_json_payload_from_text(content)
+                issues = None
+                if isinstance(payload, list):
+                    issues = payload
+                elif isinstance(payload, dict):
+                    maybe_issues = payload.get('issues')
+                    if isinstance(maybe_issues, list):
+                        issues = maybe_issues
+                    if include_rubric_score:
+                        rs = payload.get('rubric_scores')
+                        if isinstance(rs, dict):
+                            normalized = {}
+                            for key in ('look', 'words', 'tone', 'information', 'structure'):
+                                item = rs.get(key, {}) if isinstance(rs.get(key, {}), dict) else {}
+                                score = item.get('score', 0)
+                                try:
+                                    score = max(0, min(25, int(score)))
+                                except Exception:
+                                    score = 0
+                                rating = str(item.get('rating', '')).strip() or _rubric_rating(score)
+                                normalized[key] = {'score': score, 'rating': rating}
+                            rubric_scores = normalized
                 if isinstance(issues, list):
                     for it in issues:
                         if not isinstance(it, dict):
@@ -1380,11 +1711,14 @@ def scan(docx_path, llm=False, provider="ollama", ollama_url=None, model=None, l
         filtered_diags.append(d)
     diagnostics = filtered_diags
 
-    return {
+    result = {
         'document': os.path.basename(docx_path),
         'findings_count': len(findings),
         'diagnostics': diagnostics,
     }
+    if include_rubric_score and isinstance(rubric_scores, dict):
+        result['rubric_scores'] = rubric_scores
+    return result
 
 
 def main():
@@ -1392,6 +1726,7 @@ def main():
     ap.add_argument('docx_path', nargs='?')
     ap.add_argument('--json-out', default=None)
     ap.add_argument('--llm', action='store_true', help='Enable Ollama-based narrative QA')
+    ap.add_argument('--no-rubric-score', action='store_true', help='Disable rubric score output in LLM narrative QA results.')
     ap.add_argument('--ollama-url', default='http://localhost:11434')
     ap.add_argument('--model', default=None)
     ap.add_argument('--llm-pull', action='store_true', help='Pull model if missing')
@@ -1565,6 +1900,7 @@ def main():
         bedrock_profile=args.bedrock_profile,
         ignore_config_path=args.ignore_config,
         feedback_config_path=args.feedback_config,
+        include_rubric_score=(not args.no_rubric_score),
     )
     print(json.dumps(result, indent=2))
 

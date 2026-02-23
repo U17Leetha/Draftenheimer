@@ -32,6 +32,7 @@ reports/
 
 # Local learned profile (may include sensitive phrases)
 draftenheimer_profile.json
+draftenheimer_learning_state.json
 
 # Local private ignore config
 draftenheimer_ignore.json

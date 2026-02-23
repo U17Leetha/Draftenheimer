@@ -223,6 +223,7 @@ fn stop_local_model_runtime(tool_dir: String, full: bool) -> Result<CommandResul
 async fn rebuild_learning_profile(
     tool_dir: String,
     reports_dir: Option<String>,
+    rebuild_mode: Option<String>,
     pair_mode: Option<String>,
     track_changes: Option<bool>,
     track_weight: Option<i32>,
@@ -238,6 +239,14 @@ async fn rebuild_learning_profile(
     if let Some(v) = reports_dir {
         if !v.trim().is_empty() {
             args.push("--reports-dir".into());
+            args.push(v);
+        }
+    }
+
+    if let Some(v) = rebuild_mode {
+        let v = v.trim().to_ascii_lowercase();
+        if v == "incremental" || v == "full" {
+            args.push("--rebuild-mode".into());
             args.push(v);
         }
     }
@@ -317,6 +326,7 @@ async fn run_scan(
     llm_pull: bool,
     auto_learn: bool,
     auto_learn_ai: bool,
+    include_rubric_score: bool,
     annotate: bool,
     json_out: Option<String>,
     annotate_out: Option<String>,
@@ -372,6 +382,9 @@ async fn run_scan(
     }
     if auto_learn_ai {
         args.push("--auto-learn-ai".into());
+    }
+    if !include_rubric_score {
+        args.push("--no-rubric-score".into());
     }
 
     if annotate {

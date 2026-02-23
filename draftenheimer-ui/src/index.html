@@ -57,6 +57,7 @@
           <label><input id="scan-llm-pull" type="checkbox" /> Pull Model If Missing</label>
           <label><input id="scan-auto-learn" type="checkbox" checked /> Auto-Learn</label>
           <label><input id="scan-auto-learn-ai" type="checkbox" /> Auto-Learn AI Compare</label>
+          <label><input id="scan-rubric-score" type="checkbox" checked /> Include Rubric Score</label>
           <label><input id="scan-annotate" type="checkbox" checked /> Annotate DOCX</label>
           <label><input id="scan-open-output" type="checkbox" /> Open output file after scan</label>
           <label><input id="scan-reveal-output" type="checkbox" /> Reveal output in file manager</label>
@@ -194,6 +195,13 @@
             </label>
             <label>
               <input id="rebuild-ai-compare" type="checkbox" /> Use AI Compare During Rebuild
+            </label>
+            <label>
+              Rebuild Mode
+              <select id="rebuild-mode">
+                <option value="incremental" selected>Incremental (Reuse Cached)</option>
+                <option value="full">Full Rebuild (Recompute All)</option>
+              </select>
             </label>
             <div class="actions">
               <button id="rebuild-learning-btn" type="button" class="ghost">Rebuild Learning Profile</button>

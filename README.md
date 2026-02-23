@@ -32,6 +32,7 @@ It reviews `.docx` reports, flags quality issues, and can write inline Word comm
 
 - Scans report structure and narrative quality.
 - Detects repeated phrasing, style issues, and consistency problems.
+- Learns and checks formatting baselines (paragraph styles, table column patterns, image sizing).
 - Optionally uses a local LLM (Ollama) for narrative QA feedback.
 - Learns rewrite and diagnostic preferences from historical report revisions (`v0.1 -> v0.2 -> v0.3 -> ...`) and reviewer decisions.
 - Annotates reports with comment tags like `RULE-PATTERN` and `AI-REVIEW` for easy filtering.
@@ -81,6 +82,8 @@ It wraps the existing CLI so you can run scans and import feedback without typin
 - Open `Settings` for AI provider/model setup, runtime control, and advanced paths.
 - Configure auto-learn behavior in `Settings`: version pair mode, Track Changes on/off, and Track Changes weight.
 - Rebuild learning from the reports directory directly via `Settings -> Rebuild Learning Profile` (no scan required).
+- Rebuild mode supports `Incremental` (reuse cached pair analysis) and `Full` (recompute all pairs).
+- Optional per-scan rubric scoring can be enabled/disabled (`Include Rubric Score`).
 - Settings values persist across restarts, including `Reports Directory`, `Ignore Config`, and `Feedback Config`.
 - Manage local Ollama runtime: start, stop, full stop, refresh models, and pull model.
 - Import reviewer decisions from annotated DOCX (`--import-feedback-docx` flow).
@@ -144,6 +147,17 @@ python3 qa_models.py pull qwen2.5:14b
   --json-out /tmp/report.qa.json
 ```
 
+Disable rubric score output for a scan:
+
+```bash
+./draftenheimer /path/to/report_v0.4.docx \
+  --llm \
+  --provider ollama \
+  --model qwen2.5:14b \
+  --no-rubric-score \
+  --json-out /tmp/report.qa.json
+```
+
 4. Optional: write comments back into an annotated DOCX:
 
 ```bash
@@ -163,6 +177,16 @@ Rebuild rule-based learned patterns from local versioned reports in `reports/`:
 
 ```bash
 python3 build_learned_profile.py
+```
+
+The rebuild now also learns formatting baselines from revised reports (styles/tables/images).
+By default rebuilds are incremental and only recompute new/changed report pairs.
+Cache state is stored in `draftenheimer_learning_state.json` (gitignored).
+
+Force a complete recompute:
+
+```bash
+python3 build_learned_profile.py --rebuild-mode full
 ```
 
 Run AI-assisted pair comparison (local Ollama) to learn additional patterns:
